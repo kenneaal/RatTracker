@@ -18,11 +18,13 @@ using SpeechLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using WebSocket4Net;
-using Ookii.Dialogs.Wpf;
-
-// May be able to drop these.
+using System.Globalization;
+using RatTracker_WPF.Models;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Threading.Tasks;
+
+// May be able to drop these.
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
@@ -32,10 +34,7 @@ using System.Reflection;
 using System.Diagnostics;
 using System.Security.Permissions;
 using System.ComponentModel;
-using System.Threading.Tasks;
 using System.Net;
-using System.Globalization;
-using RatTracker_WPF.Models;
 
 namespace RatTracker_WPF
 {
@@ -81,6 +80,21 @@ namespace RatTracker_WPF
                 return "I am a negative rat";
         }
     }
+    public class clientConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            Console.WriteLine("Typeof value is " + value.GetType() + " and is " + value.ToString());
+            Client myclient = value as Client;
+            if (myclient == null)
+                return "No client data";
+            return myclient.cmdrname;
+        }
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            return "I am a negative client";
+        }
+    }
         public class Links
     {
         public string self { get; set; }
@@ -96,6 +110,8 @@ namespace RatTracker_WPF
 
     public class Client
     {
+        public string cmdrname { get; set; }
+        public string nickname { get; set; }
     }
 
     public class Datum
@@ -198,6 +214,7 @@ namespace RatTracker_WPF
         WebSocket ws;
         SpVoice voice = new SpVoice();
         string currentSystem;
+        string scState;
         RootObject activeRescues = new RootObject();
 
         public MainWindow()
@@ -405,6 +422,9 @@ namespace RatTracker_WPF
                             myClient.clientIP = wingMatch.Groups[1].Value;
 
                         }
+                        /* If the friend request matches the client name, store his session ID. */
+                        myClient.clientID = wingdata.Element("commander_id").Value;
+                        myClient.sessionID = wingdata.Element("session_runid").Value;
                     }
                     
                 }
@@ -418,6 +438,13 @@ namespace RatTracker_WPF
             }
             return;
         }
+
+        private void MainWindow_Closing(object sender, CancelEventArgs e)
+        {
+            // Clean up our threads and exit.
+            
+        }
+
         private async void  checkLogDirectory()
         {
             Object col;
@@ -489,6 +516,7 @@ namespace RatTracker_WPF
                     {
                         count++;
                         line = sr.ReadLine();
+                        // TODO: Populate WAN, STUN and Turn server labels. Make cleaner TURN detection.
                         if(line.Contains("WAN:"))
                         {
                             appendStatus("E:D is configured to listen on "+line);
@@ -563,9 +591,7 @@ namespace RatTracker_WPF
                     else
                     {
                         sr.BaseStream.Seek(this.fileOffset, SeekOrigin.Begin);
-                        //appendStatus("Seek to " + fileOffset);
                     }
-
                     string line;
                     int count=0;
                     while (sr.Peek() != -1)
@@ -586,6 +612,16 @@ namespace RatTracker_WPF
 
         private void  parseLine(string line)
         {
+ /*           if (parserState == "ISLAND")
+            {
+                if (line.Contains(myClient.sessionID.ToString()) && scState=="Normalspace")
+                {
+                    appendStatus("Normalspace Instance match! " + line);
+                    Dispatcher disp = Dispatcher;
+                    disp.BeginInvoke(DispatcherPriority.Normal, (Action)(() => wrButton.Background = Brushes.Green));
+                    //voice.Speak("Successful normal space instance with client.");
+                }
+            } */
             string reMatchSystem = ".*?(System:).*?\\(((?:[^)]+)).*?\\)";
             Match match = Regex.Match(line, reMatchSystem, RegexOptions.IgnoreCase);
             if (match.Success)
@@ -614,7 +650,7 @@ namespace RatTracker_WPF
             if (line.Contains("</data>"))
             {
                 appendStatus("Exit XML parsing mode.");
-                parserState = "normal";
+                //parserState = "normal";
             }
             if (line.Contains("<FriendWingInvite>"))
             {
@@ -628,10 +664,10 @@ namespace RatTracker_WPF
             {
                 appendStatus("Prewing communication underway...");
             }
-            if (line.Contains("TalkChannelManager::OpenOutgoingChannelTo"))
+            if (line.Contains("TalkChannelManager::OpenOutgoingChannelTo") && line.Contains(myClient.clientIP.ToString()))
             {
                 appendStatus("Wing established, opening voice comms.");
-                voice.Speak("Wing established.");
+                //voice.Speak("Wing established.");
                 Dispatcher disp = Dispatcher;
                 disp.BeginInvoke(DispatcherPriority.Normal, (Action)(() => wrButton.Background = Brushes.Green));
 
@@ -640,18 +676,27 @@ namespace RatTracker_WPF
             {
                 appendStatus("Voice communications established.");
             }
-            if (line.Contains("NormalFlight"))
+            if (line.Contains("NormalFlight") && scState =="Supercruise")
             {
+                scState = "Normalspace";
                 appendStatus("Drop to normal space detected.");
-                voice.Speak("Dropping to normal space.");
+                //voice.Speak("Dropping to normal space.");
+            }
+            if(line.Contains("Supercruise") && scState == "Normalspace")
+            {
+                scState = "Supercruise";
+                appendStatus("Entering supercruise.");
+                //voice.Speak("Entering supercruise.");
             }
             if(line.Contains("CLAIMED ------------vvv"))
             {
                 appendStatus("Island claim message detected, parsing members...");
+                //parserState = "ISLAND";
             }
             if (line.Contains("claimed ------------^^^"))
             {
                 appendStatus("End of island claim member list. Resuming normal parse.");
+                //parserState = "NORMAL";
             }
             if (line.Contains("SESJOINED"))
             {
@@ -684,7 +729,7 @@ namespace RatTracker_WPF
                     appendStatus("Response string:" + responseString);
                     NameValueCollection temp = new NameValueCollection();
                     dynamic m = JsonConvert.DeserializeObject(responseString);
-                    voice.Speak("Welcome to " + value);
+                    //voice.Speak("Welcome to " + value);
                     currentSystem = value;
                     await disp.BeginInvoke(DispatcherPriority.Normal, (Action)(() => systemNameLabel.Content = value));
                     if (responseString.Contains("-1"))
@@ -696,7 +741,8 @@ namespace RatTracker_WPF
                     return;
                 }
             }
-            catch (Exception ex) { 
+            catch (Exception ex) {
+                appendStatus("Exception in triggerSystemChange: " + ex.Message);
                 return;
             }
         }
@@ -871,7 +917,8 @@ namespace RatTracker_WPF
         {
             appendStatus("Trying to fetch rescues...");
             Dictionary<string,string> data = new Dictionary<string, string>();
-            data.Add("rats", "56a8fcc7abdd7cc91123fd25");
+            //data.Add("rats", "56a8fcc7abdd7cc91123fd25");
+            data.Add("open", "true");
             String col = await apworker.queryAPI("rescues",data);
             
             if (col == null)
@@ -882,37 +929,9 @@ namespace RatTracker_WPF
                 RootObject rescues = JsonConvert.DeserializeObject<RootObject>(col);
                 await GetMissingRats(rescues);
 
-                /* appendStatus("rescues object has data: " + rescues.ToString());
-                foreach (var myrescue in rescues.data)
-                {
-                    appendStatus("Client: " + myrescue.client.ToString()+" Rats:"+myrescue.tempRats.ToString());
-                    
-                } */
-                /* Trying this one more time from the designer... 
-                DataGridTextColumn colClient = new DataGridTextColumn();
-                DataGridTextColumn colRats = new DataGridTextColumn();
-                DataGridTextColumn colActive = new DataGridTextColumn();
-                colClient.Header = "tempRats";
-                colClient.Binding = new Binding("client");
-                colRats.Header = "Rats";
-                colRats.Binding=new Binding("tempRats");
-                colActive.Header = "Active";
-                colActive.Binding = new Binding("active");
-                rescueGrid.Columns.Add(colClient);
-                rescueGrid.Columns.Add(colRats);
-                rescueGrid.Columns.Add(colActive);
-                */
                 rescueGrid.ItemsSource = rescues.data;
                 rescueGrid.AutoGenerateColumns = false;
-                /* rescueGrid.Columns[0].Visibility = System.Windows.Visibility.Hidden;
-                rescueGrid.Columns[1].Visibility = System.Windows.Visibility.Hidden;
-                rescueGrid.Columns[3].Visibility = System.Windows.Visibility.Hidden;
-                rescueGrid.Columns[5].Visibility = System.Windows.Visibility.Hidden;
-                rescueGrid.Columns[6].Visibility = System.Windows.Visibility.Hidden;
-                rescueGrid.Columns[7].Visibility = System.Windows.Visibility.Hidden;
-                rescueGrid.Columns[8].Visibility = System.Windows.Visibility.Hidden;
-                rescueGrid.Columns[9].Visibility = System.Windows.Visibility.Hidden;
-                rescueGrid.Columns[10].Visibility = System.Windows.Visibility.Hidden; */
+
                 foreach (DataGridColumn column in rescueGrid.Columns)
                 {
                     appendStatus("Column:" + column.Header);
@@ -923,7 +942,7 @@ namespace RatTracker_WPF
         }
 
         // TODO: Move to API?
-        private static async Task GetMissingRats(RootObject rescues)
+        private async Task GetMissingRats(RootObject rescues)
         {
             IEnumerable<string> ratIdsToGet = new List<string>();
 
@@ -934,14 +953,9 @@ namespace RatTracker_WPF
 
             foreach (var ratId in ratIdsToGet)
             {
-                HttpClient wc = new HttpClient();
-                var res = await wc.GetAsync("http://dev.api.fuelrats.com/rats/?_id=" + ratId);
-                var content = res.Content;
-                string responsestring = content.ReadAsStringAsync().Result;
-
-                JObject response = JObject.Parse(responsestring);
-                List<JToken> tokens = response["data"].Children().ToList();
-
+                var response = await apworker.queryAPI("rats", new Dictionary<string, string> { { "_id", ratId }, { "limit", "1" } });
+                JObject jsonRepsonse = JObject.Parse(response);
+                List<JToken> tokens = jsonRepsonse["data"].Children().ToList();
                 var rat = JsonConvert.DeserializeObject<Rat>(tokens[0].ToString());
                 Rats.TryAdd(ratId, rat);
 
